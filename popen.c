@@ -6,6 +6,7 @@ int main( void)
 {
    char  buf[BUF_SIZE];
    FILE *fp;
+	int x;
 
    fp = popen("ls -l", "r");
    if (NULL == fp)
