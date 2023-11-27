@@ -46,30 +46,38 @@ void *online_compile(void *sock){
 	int clnt_sock = *((int *)sock);
 	char buf[BUF_SIZE];
 	
-	ssize_t recv_check;
-	int total_size;
 	//1. Receive the filename(255bytes) and filesize(4bytes)
 	if(recv_byte(clnt_sock, buf, 255) == 1){
-		error_handling("ERROR: receive filename");
+		close(clnt_sock);
+		free(sock);
+		return 1;
 	}
 	char filename[255];//Max filename length in LINUX
 	strcpy(filename, buf);
 	
 	int filesize;
 	if(recv_byte(clnt_sock, (void *)&filesize, 4) == 1){ //It makes no sense to receive files of unknown size. Therefore, Server receives filesize from client.
-		error_handling("ERROR: receive filesize");
+		close(clnt_sock);
+		free(sock);
+		return 1;
 	}
-	printf("FILESIZE: %d\n",filesize);
+
 	if(filesize > 50000){ //Assume that Max filesize is 50000bytes. Approximately, 50000bytes is 1000 lines. I guess it is enough as Simple Online C compiler.
-		error_handling("ERROR: Too large filedata");
+		close(clnt_sock);
+		free(sock);
+		return 1;
 	}
 	
 	//2. Receive the file data
-	FILE *recv_file = fopen(filename, "ab");
-	int read_size;
-	while( (read_size = read(clnt_sock, buf, BUF_SIZE))/*recv_check = recv(clnt_sock, buf, BUF_SIZE, 0)*/){
-		printf("%s",buf);
-		if(!fwrite(buf, 1, read_size, recv_file)) error_handling("ERROR: fwrite the filedata with received data.");
+	FILE *recv_file = fopen(filename, "ab");	
+	ssize_t recv_check;
+	while( (recv_check = recv(clnt_sock, buf, BUF_SIZE, 0)) ){
+		if(!fwrite(buf, 1, recv_check, recv_file)){
+			fclose(recv_file);
+			close(clnt_sock);
+			free(sock);
+			return 1;
+		} 
 	}
 	fclose(recv_file);
 
@@ -80,21 +88,41 @@ void *online_compile(void *sock){
 	sprintf(cmd, "gcc %s.c -o %s 2>&1 ",filename, filename);
 	FILE *fp = popen(cmd, "r");
 	if(fp == NULL){
-		error_handling("ERROR: open pipe stream");
+		pclose(fp);
+		close(clnt_sock);
+		free(sock);
+		return 1;
 	}
 	
 	//4. Send result or error message.
 	FILE * c_fp = fdopen(dup(fileno(fp)), "r");
-	if( pclose(fp)!=0){
+	if( pclose(fp)!=0){//Case1: when occurring compile error.
 		while(fgets(buf, BUF_SIZE, c_fp)){
-                	if(send_byte(clnt_sock,buf, BUF_SIZE)) error_handling("ERROR: send the message to client.");
+                	if(send_byte(clnt_sock,buf, BUF_SIZE)){
+				pclose(c_fp);
+				close(clnt_sock);
+				free(sock);
+	
+			}
         	}
-	}else{
+	}else{ //Case2: when succeeding compile or occurring warning messages.
 		sprintf(cmd, "./%s", filename);
 		FILE * run = popen(cmd, "r");
-		if(run == NULL) 
-			error_handling("ERROR: open run pipe stream");
-		while(fgets(buf, BUF_SIZE, run)){
+		if(run == NULL){
+			pclose(run);
+			pclose(c_fp);
+			close(clnt_sock);
+			free(sock);
+			return 1;
+		} 
+
+		while(fgets(buf, BUF_SIZE, c_fp)){//To print warning messages.
+                	if(send_byte(clnt_sock,buf, BUF_SIZE)) error_handling("ERROR: send the message to client.");
+        	}
+		char resultmsg[20] = "Compilation Result:\n";
+		if(send_byte(clnt_sock,resultmsg, sizeof(resultmsg))) error_handling("ERROR: send the result start point");
+
+		while(fgets(buf, BUF_SIZE, run)){//To print the reulst of executing.
 			if(send_byte(clnt_sock, buf, BUF_SIZE)) error_handling("ERROR: send the result of run");
 		}
 		sprintf(cmd, "rm %s", filename);
@@ -111,6 +139,8 @@ void *online_compile(void *sock){
 	pclose(c_fp);
 	close(clnt_sock);
 	free(sock);
+	
+	return 0;
 }
 
 
@@ -119,11 +149,7 @@ int main(int argc, char *argv[])
 	int serv_sock;
 	struct sockaddr_in serv_adr, clnt_adr;
 	
-	pid_t pid;
-	struct sigaction act;
 	socklen_t adr_sz;
-	int str_len, state;
-	char buf[BUF_SIZE];
 	if (argc != 2) {
 		printf("Usage : %s <port>\n", argv[0]);
 		exit(1);

@@ -31,7 +31,6 @@ int main(int argc, char *argv[])
 	
 	char file_name[255];
 	char buf[BUF_SIZE];
-	int read_cnt;
 	int read_size;
 	struct sockaddr_in serv_adr;
 	if (argc != 4) {

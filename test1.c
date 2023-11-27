@@ -1,3 +1,5 @@
+/*This testcase is compile error case.*/
+
 #include <stdio.h>
 
 int main(){
